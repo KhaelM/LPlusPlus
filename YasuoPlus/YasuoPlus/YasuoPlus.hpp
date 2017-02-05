@@ -1,6 +1,11 @@
 #pragma once
 #include "cpplinq.hpp"
 #include "PluginBase.hpp"
+#include "UnitTree.hpp"
+
+#define BASE_ATTACKSPEED 0.67f
+#define Q_BASE_DELAY .4f
+#define Q_EMPOWERED_BASE_DELAY .35f
 
 using namespace std;
 using namespace Utils;
@@ -16,17 +21,19 @@ public:
 	ISpell2* R;
 
 	UnitDash* lastDash;
+	vector<IUnit*> InRange;
+	UnitTree UnitTree;
 
 	void OnLoad() override
 	{
-		Log("Laoded!");
+		Log("Loaded!");
 		lastDash = 0;
 		this->LoadSpells();
 	}
 
 	void OnUnLoad() override
 	{
-
+		UnitTree.Clear();
 	}
 
 	void OnRender() override
@@ -35,11 +42,10 @@ public:
 		for (auto pos = Player()->GetNavigationPath()->WaypointStart_; pos != Player()->GetNavigationPath()->WaypointEnd_; pos++) {
 			GRender->DrawOutlinedCircle(*pos, Vec4(0, 255, 0, 255), 70);
 		}
-		for (auto unit : GEntityList->GetAllUnits())
+		/*for (auto unit : InRange)
 		{
-			if (EnemyIsJumpable(unit))
-				GRender->DrawOutlinedCircle(unit->GetPosition(), Vec4(255, 255, 0, 255), 70);
-		}
+			GRender->DrawOutlinedCircle(unit->GetPosition(), Vec4(255, 255, 0, 255), 70);
+		}*/
 	}
 
 	void OnGameUpdate() override
@@ -50,9 +56,20 @@ public:
 
 		if (GOrbwalking->GetOrbwalkingMode() == kModeCombo)
 		{
+			UnitTree.Clear();
+			for (auto unit : GEntityList->GetAllMinions(true,true,true))
+			{
+				UnitTree.Insert(unit);
+			}
+			InRange.clear();
+			UnitTree.FindInRange(Player()->GetPosition().To2D(), 1000, InRange);
+
+			cout << "size: " << InRange.size() << endl;
+
+			//cout << "Q Speed: " << GetQSpeed() << endl;
 			DoCombo(target);
 		}
-		
+
 		UseRSmart();
 	}
 
@@ -72,15 +89,20 @@ private:
 
 	void DoCombo(IUnit* target)
 	{
-		if (target == 0)
+		if (target == 0) {
+			GapCloseE(GGame->CursorPosition().To2D());
 			return;
-
-		if (!UseESmart(target))
+		}
+		set<IUnit*> ignores;
+		ignores.insert(target);
+		if (!GapCloseE(target->GetPosition().To2D(), &ignores))
 		{
-			set<IUnit*> ignores;
-			ignores.insert(target);
-			if (GapCloseE(target->GetPosition().To2D(), &ignores))
+			if (UseESmart(target))
 				return;
+		}
+		else
+		{
+			return;
 		}
 
 		UseQSmart(target);
@@ -101,9 +123,9 @@ private:
 
 		if (!IsDashing())
 		{
-			if(IsQEmpovered())
+			if (IsQEmpovered())
 				CastQEmpowered(target);
-			else if(!onlyEmpowered)
+			else if (!onlyEmpowered)
 				CastQ(target);
 		}
 		else
@@ -118,7 +140,9 @@ private:
 			return false;
 
 		IUnit* bestJumpUnit = 0;
-		float bestRange = 350;
+		float bestRange = Distance(Player(), position);
+
+		//cout << " bestDist: " << bestRange << endl;
 
 		for (auto unit : GEntityList->GetAllUnits())
 		{
@@ -126,7 +150,11 @@ private:
 				continue;
 			if (ignore != 0 && ignore->find(unit) != ignore->end())
 				continue;
-			float dist = (unit->GetPosition().To2D() - position).Length();
+			Vec3 predictionPos;
+			GPrediction->GetFutureUnitPosition(unit, E->GetDelay(), true, predictionPos);
+
+			Vec2 posAfterJump = Player()->GetPosition().To2D().Extend(predictionPos.To2D(), E->Range());
+			float dist = (posAfterJump - position).Length();
 			if (dist < bestRange)
 			{
 				bestJumpUnit = unit;
@@ -208,7 +236,7 @@ private:
 	set<IUnit*> GetKnockedUpEnemies(float &leastKockUpTime)
 	{
 		set<IUnit*> knockedUp;
-		for (auto hero : GEntityList->GetAllHeros(false,true))
+		for (auto hero : GEntityList->GetAllHeros(false, true))
 		{
 			if (hero->IsDead() || hero->IsInvulnerable())
 				continue;
@@ -242,17 +270,17 @@ private:
 	{
 		if (!IsQEmpovered())
 			return false;
-
-		return QEmpowerd->CastOnTarget(target);
+		return QEmpowerd->CastOnTarget(target, 3);
 	}
 
 	bool CastQCircle(IUnit* target)
 	{
 		if (!IsDashing())
 			return false;
+		cout << "Qempow cirtlce" << endl;
 
-		if (Distance(target, lastDash->EndPosition) < 50 && Distance(Player(), target) < QCircle->Radius())
-			return Q->CastOnPlayer();
+		if (Distance(target, lastDash->EndPosition) < 50 && Distance(target, lastDash->EndPosition.To2D()) < QCircle->Radius())
+			return Q->CastOnTarget(target);
 		return false;
 	}
 
@@ -275,10 +303,10 @@ private:
 		Q->SetSkillshot(GetQSpeed(), 50.f, FLT_MAX, 475.f);
 
 		QEmpowerd = GPluginSDK->CreateSpell2(kSlotQ, kTargetCast, true, true, kCollidesWithNothing);
-		QEmpowerd->SetSkillshot(0.1f, 50.f, 1200.f, 1000.f);
+		QEmpowerd->SetSkillshot(GetQEmpowerdSpeed(), 50.f, 1200.f, 1000.f);
 
 		QCircle = GPluginSDK->CreateSpell2(kSlotQ, kTargetCast, false, true, kCollidesWithNothing);
-		QCircle->SetSkillshot(.0f, 375.f, FLT_MAX, 0.f);
+		QCircle->SetSkillshot(GetQSpeed(), 325.f, FLT_MAX, 0.f);
 
 		W = GPluginSDK->CreateSpell2(kSlotW, kLineCast, false, true, kCollidesWithMinions);
 		W->SetOverrideRange(400.f);
@@ -292,12 +320,28 @@ private:
 
 	void UpdateChampionData() {
 		Q->SetOverrideDelay(GetQSpeed());
+		QEmpowerd->SetOverrideDelay(GetQEmpowerdSpeed());
+		QCircle->SetOverrideDelay(GetQSpeed());
 	}
 
 	float GetQSpeed()
 	{
-		float factor = .5f;
-		return Player()->AttackSpeed() * factor;
+		float atackSpeedPerc = (Player()->AttackSpeed() - 1) * 100;
+		float reduction = atackSpeedPerc / 1.6725;
+		if (reduction > 66)
+			reduction = 66;
+
+		return (Q_BASE_DELAY*(100 - reduction)) / 100;
+	}
+
+	float GetQEmpowerdSpeed()
+	{
+		float atackSpeedPerc = (Player()->AttackSpeed() - 1) * 100;
+		float reduction = atackSpeedPerc / 1.6725;
+		if (reduction > 66)
+			reduction = 66;
+
+		return (Q_EMPOWERED_BASE_DELAY*(100 - reduction)) / 100;
 	}
 #pragma endregion  spellsLoad 
 
@@ -311,7 +355,7 @@ private:
 
 	bool IsDashing()
 	{
-		return lastDash != 0 && lastDash->EndTick > GameTicks();
+		return lastDash != 0 && lastDash->EndTick + 300 > GameTicks();
 	}
 
 #pragma endregion yasuoInfo  

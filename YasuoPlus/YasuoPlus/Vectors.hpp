@@ -142,6 +142,11 @@ public:
 		return sqrtf(x * x + y * y);
 	}
 
+	float LengthSqr()
+	{
+		return x * x + y * y;
+	}
+
 	float DotProduct(const Vec2& vecOther)
 	{
 		return ((x * vecOther.x) + (y * vecOther.y));
