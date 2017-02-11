@@ -3,6 +3,7 @@
 #include "PluginBase.hpp"
 #include "UnitTree.hpp"
 #include <queue>
+#include <ctime>
 
 #define BASE_ATTACKSPEED 0.67f
 #define Q_BASE_DELAY .4f
@@ -21,14 +22,14 @@ public:
 	ISpell2* E;
 	ISpell2* R;
 
-	UnitDash* lastDash;
+	UnitDash LastDash;
 	vector<IUnit*> InRange;
 	UnitTree UnitTree;
 	
 	void OnLoad() override
 	{
 		Log("Loaded!");
-		lastDash = 0;
+		ZeroMemory(&LastDash, sizeof(UnitDash));
 		this->LoadSpells();
 	}
 
@@ -39,7 +40,8 @@ public:
 
 	void OnRender() override
 	{
-		GRender->DrawOutlinedCircle(Player()->GetPosition(), Vec4(255, 255, 0, 255), 475);
+		if(IsDashing())
+			GRender->DrawOutlinedCircle(Player()->GetPosition(), Vec4(255, 255, 0, 255), 475);
 		//return;
 		for (auto unit : InRange)
 		{
@@ -69,9 +71,9 @@ public:
 
 		if (GOrbwalking->GetOrbwalkingMode() == kModeCombo)
 		{
-			//cout << "inserted!: " << endl;
+			cout << "lasr: " << LastDash.StartTick << " gt:" << GameTicks() << endl;
 
-			cout << "X " << Player()->GetPosition().x << " Y " << Player()->GetPosition().z << endl;
+			//cout << "X " << Player()->GetPosition().x << " Y " << Player()->GetPosition().z << endl;
 
 			//cout << "Q Speed: " << GetQSpeed() << endl;
 			DoCombo(target);
@@ -84,7 +86,9 @@ public:
 	{
 		if (dashInfo->Source != Player())
 			return;
-		lastDash = dashInfo;
+		cout << "OnDash" << endl;
+		memcpy(&LastDash, dashInfo, sizeof(UnitDash));
+		TickOffset = LastDash.StartTick - (int)(GGame->Time() * 1000);
 	}
 
 protected:
@@ -122,22 +126,27 @@ private:
 
 
 #pragma region yasuoLogic
-
-	typedef pair<float, Vec2> VecPair;
-
-	IUnit* BestEJump(Vec2 target)
+	
+	IUnit* BestEJump(Vec2 target, set<IUnit*> *ignore = NULL)
 	{
 		auto playerPos = Player()->GetPosition().To2D();
 
-		float jumpCost = 0.6f - (((float)Player()->GetSpellBook()->GetLevel(kSlotE)) / 10.0f) + 0.2f;
+		float jumpCost = 0.6f - (((float)Player()->GetSpellBook()->GetLevel(kSlotE)) / 10.0f) + 0.4f;
 		float fastestTime = (playerPos - target).Length() / Player()->MovementSpeed();
 		IUnit* best = NULL;
 		vector<IUnit*> around;
 		set<IUnit*> *path = new set<IUnit*>();
 		UnitTree.FindInRange(playerPos, E->Range(), around);
+		auto myDist = Distance(Player(), target);
 		for (auto u : around)
 		{
 			if(!EnemyIsJumpable(u))
+				continue;
+			if(ignore != NULL && ignore->count(u) != 0)
+				continue;
+			Vec2 posAfterJump = playerPos.Extend(u->GetPosition().To2D(), E->Range());
+			auto unitDist = Distance(posAfterJump, target);
+			if(unitDist -100 > myDist)
 				continue;
 			auto time = GetCost(u, playerPos, target, jumpCost, jumpCost, path);
 			if(time<fastestTime)
@@ -154,17 +163,18 @@ private:
 	float GetCost(IUnit* jump, Vec2 from, Vec2 target, float jumpCost, float totalCost, set<IUnit*> *path)
 	{
 		//Doesnt contain
-		if (path->count(jump) == 0)
+		if (path->find(jump) == path->end() && path->size()<4)
 		{
 			path->insert(jump);
 			auto pos = jump->GetPosition().To2D();
 			//Prediction if first check
-			if (path->size() == 1)
+			if (path->size() == 1 && jump->IsMoving())
 			{
 				Vec3 pred;
 				GPrediction->GetFutureUnitPosition(jump, E->GetDelay(), true, pred);
 				pos = pred.To2D();
 			}
+
 			Vec2 posAfterJump = from.Extend(pos, E->Range());
 
 			vector<IUnit*> around;
@@ -175,7 +185,8 @@ private:
 			{
 				if (!EnemyIsJumpable(u))
 					continue;
-				auto time = GetCost(u, posAfterJump, target, jumpCost, totalCost + jumpCost, path);
+				Vec2 fromAfterWalk = posAfterJump.Extend(target, Player()->MovementSpeed()*jumpCost);
+				auto time = GetCost(u, fromAfterWalk, target, jumpCost, totalCost + jumpCost, path);
 				if (time < fastestTime)
 					fastestTime = time;
 			}
@@ -220,23 +231,12 @@ private:
 		if (!E->IsReady())
 			return false;
 
-		IUnit* bestJumpUnit = NULL;
+		IUnit* bestJumpUnit = 0;
 		float bestRange = Distance(Player(), position);
 
-		//cout << " bestDist: " << bestRange << endl;
-		//Remnove ignores
-		//if(ignore != NULL)
-		//	for(IUnit* ign : *ignore)
-		//		UnitTree.Remove(ign);
+		bestJumpUnit = BestEJump(position, ignore);
 
-		bestJumpUnit = BestEJump(position);
-
-		//Restre tree
-		//if (ignore != NULL)
-		//	for (IUnit* ign : *ignore)
-		//		UnitTree.Insert(ign);
-
-		if (bestJumpUnit != NULL)
+		if (bestJumpUnit != 0)
 		{
 			CastE(bestJumpUnit);
 			return true;
@@ -248,13 +248,13 @@ private:
 	{
 		if (!E->IsReady())
 			return false;
-		float trueAARange = Player()->AttackRange() + target->BoundingRadius();
+		float trueAARange = Player()->AttackRange() ;
 		Vec3 predictionPos;
 		GPrediction->GetFutureUnitPosition(target, E->GetDelay(), true, predictionPos);
 		float dist = Distance(Player(), predictionPos);
 		Vec2 posAfterJump = Player()->GetPosition().To2D().Extend(predictionPos.To2D(), E->Range());
 		float distAfter = (predictionPos.To2D() - posAfterJump).Length();
-		if (dist < distAfter || target->IsMoving())
+		if (dist < distAfter || target->IsMoving() || IsFacing(target,Player()))
 			return false;
 
 		float movespeedDelta = (Player()->MovementSpeed() - target->MovementSpeed());
@@ -337,13 +337,17 @@ private:
 
 	bool CastQ(IUnit* target)
 	{
-		return Q->CastOnTarget(target);
+		if (!Q->IsReady() || Distance(Player(), target) > Q->Range())
+			return false;
+		cout << "CastQ "<< Q->Range() << endl;
+		return Q->CastOnTarget(target,3);
 	}
 
 	bool CastQEmpowered(IUnit* target)
 	{
-		if (!IsQEmpovered())
+		if (!IsQEmpovered() || !Q->IsReady() || Distance(Player(), target)>Q->Range())
 			return false;
+		cout << "CastQEmpowered" << endl;
 		return QEmpowerd->CastOnTarget(target, 3);
 	}
 
@@ -352,20 +356,21 @@ private:
 		if (!IsDashing())
 			return false;
 		cout << "Qempow cirtlce" << endl;
+		Vec3 pred;
+		GPrediction->GetFutureUnitPosition(target, GameTicks() - LastDash.EndTick, true, pred);
 
-		if (Distance(target, lastDash->EndPosition) < 50 && Distance(target, lastDash->EndPosition.To2D()) < QCircle->Radius())
+		if (Distance(target, LastDash.EndPosition.To2D()) < QCircle->Radius() 
+			&& Distance(pred.To2D(), LastDash.EndPosition.To2D()) < QCircle->Radius())
 			return Q->CastOnTarget(target);
 		return false;
 	}
 
 	bool CastE(IUnit* target)
 	{
-		if (!E->IsReady() || Distance(target, Player()) > E->Range())
+		if (!E->IsReady())
 			return false;
-		//For later!
-		Vec2 posAfterJump = Player()->GetPosition().To2D().Extend(target->GetPosition().To2D(), E->Range());
-
-		return E->CastOnUnit(target);
+		auto t = E->CastOnUnit(target);;
+		return t;
 	}
 
 #pragma endregion spellsExecute  
@@ -387,6 +392,7 @@ private:
 
 		E = GPluginSDK->CreateSpell2(kSlotE, kLineCast, false, false, kCollidesWithNothing);
 		E->SetOverrideRange(475.f);
+		E->SetOverrideDelay(0.1f);
 
 		R = GPluginSDK->CreateSpell2(kSlotR, kLineCast, false, false, kCollidesWithMinions);
 		W->SetOverrideRange(1200.f);
@@ -429,7 +435,7 @@ private:
 
 	bool IsDashing()
 	{
-		return lastDash != 0 && lastDash->EndTick + 300 > GameTicks();
+		return LastDash.EndTick+100 > GameTicks();
 	}
 
 #pragma endregion yasuoInfo  

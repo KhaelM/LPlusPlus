@@ -46,10 +46,10 @@ public:
 		FindInRange(Root, orgin, radius, result);
 	}
 
-	void FindInRangeNotWorking(Vec2& orgin, float radius, vector<IUnit*>& result)
+	void FindInRangeSlower(Vec2& orgin, float radius, vector<IUnit*>& result)
 	{
 		vector<IUnit*> temp;
-		FindInRect(Root, orgin.x- radius/2, orgin.x + radius / 2, orgin.y - radius / 2, orgin.y + radius / 2, temp);
+		FindInRect(Root, orgin.x - radius, orgin.x + radius, orgin.y - radius, orgin.y + radius, temp);
 		for (auto u : temp)
 		{
 			if ((u->GetPosition().To2D() - orgin).LengthSqr() < radius * radius) {
@@ -119,8 +119,8 @@ private:
 														  //node->Init(unit, depth % 2);
 			return node;
 		}
-
-		if (node->key == unit->GetPosition().To2D())
+		auto pos = unit->GetPosition().To2D();
+		if (node->key == pos)
 		{
 			node->values.push_back(unit);
 			return node;
@@ -128,14 +128,14 @@ private:
 
 		if (node->splitaxis == 0)
 		{
-			if ((node->key.x >= unit->GetPosition().x))
+			if ((node->key.x > pos.x))
 				node->greater = Insert(node->greater, unit, depth + 1);
 			else
 				node->less = Insert(node->less, unit, depth + 1);
 		}
 		else
 		{
-			if ((node->key.y >= unit->GetPosition().y))
+			if ((node->key.y > pos.y))
 				node->greater = Insert(node->greater, unit, depth + 1);
 			else
 				node->less = Insert(node->less, unit, depth + 1);
@@ -153,17 +153,33 @@ private:
 		//X
 		if (node->splitaxis == 0)
 		{
-			if (xmin <= key.x)
+			if (key.x < xmin)
+			{
 				FindInRect(node->less, xmin, xmax, ymin, ymax, result);
-			if (xmax >= key.x)
+				return;
+			}
+			if (key.x > xmax)
+			{
 				FindInRect(node->greater, xmin, xmax, ymin, ymax, result);
+				return;
+			}
+			FindInRect(node->less, xmin, xmax, ymin, ymax, result);
+			FindInRect(node->greater, xmin, xmax, ymin, ymax, result);
 		}
 		else
 		{
-			if (ymin <= key.y)
+			if (key.y < ymin)
+			{
 				FindInRect(node->less, xmin, xmax, ymin, ymax, result);
-			if (ymax >= key.y)
+				return;
+			}
+			if (key.y > ymax)
+			{
 				FindInRect(node->greater, xmin, xmax, ymin, ymax, result);
+				return;
+			}
+			FindInRect(node->less, xmin, xmax, ymin, ymax, result);
+			FindInRect(node->greater, xmin, xmax, ymin, ymax, result);
 		}
 	}
 
@@ -174,6 +190,7 @@ private:
 		if ((node->key - orgin).LengthSqr() < radius * radius) {
 			result.insert(result.end(), node->values.begin(), node->values.end());
 		}
+
 		//X
 		if (node->splitaxis == 0)
 		{
@@ -181,7 +198,7 @@ private:
 				FindInRange(node->greater, orgin, radius, result);
 				return;
 			}
-			if (orgin.x - node->key.x > radius) {
+			if (node->key.x - orgin.x < -radius) {
 				FindInRange(node->less, orgin, radius, result);
 				return;
 			}
@@ -194,7 +211,7 @@ private:
 				FindInRange(node->greater, orgin, radius, result);
 				return;
 			}
-			if (orgin.y - node->key.y  > radius) {
+			if (node->key.y - orgin.y < -radius) {
 				FindInRange(node->less, orgin, radius, result);
 				return;
 			}

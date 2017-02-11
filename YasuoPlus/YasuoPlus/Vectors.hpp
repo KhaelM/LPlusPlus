@@ -4,6 +4,8 @@
 #include <Windows.h>
 #include <cmath>
 
+#define PI 3.1415927
+
 class Vec2
 {
 public:
@@ -162,6 +164,59 @@ public:
 		auto from = Vec2(x, y);
 
 		return from + (distance * (toVector3 - from).VectorNormalize());
+	}
+
+	Vec2 Perpendicular() const
+	{
+		return Vec2(x, -y);
+	}
+
+	float Polar() const
+	{
+		if (Close(x, 0, 0))
+		{
+			if (y > 0)
+			{
+				return 90;
+			}
+			return y < 0 ? 270 : 0;
+		}
+
+		auto theta = RadianToDegree(atan((y) / x));
+		if (x < 0)
+		{
+			theta = theta + 180;
+		}
+		if (theta < 0)
+		{
+			theta = theta + 360;
+		}
+		return theta;
+	}
+
+	float AngleBetween(const Vec2& p2) const
+	{
+		auto theta = Polar() - p2.Polar();
+		if (theta < 0)
+		{
+			theta = theta + 360;
+		}
+		if (theta > 180)
+		{
+			theta = 360 - theta;
+		}
+		return theta;
+	}
+
+	bool Close(float a, float b, float eps) const
+	{
+		return abs(a - b) <= 1E-5;
+	}
+
+private:
+	static float RadianToDegree(double angle)
+	{
+		return (angle * (180.0 / PI));
 	}
 };
 
