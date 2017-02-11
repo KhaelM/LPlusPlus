@@ -2,6 +2,7 @@
 #include "cpplinq.hpp"
 #include "PluginBase.hpp"
 #include "UnitTree.hpp"
+#include <queue>
 
 #define BASE_ATTACKSPEED 0.67f
 #define Q_BASE_DELAY .4f
@@ -23,7 +24,7 @@ public:
 	UnitDash* lastDash;
 	vector<IUnit*> InRange;
 	UnitTree UnitTree;
-
+	
 	void OnLoad() override
 	{
 		Log("Loaded!");
@@ -38,33 +39,39 @@ public:
 
 	void OnRender() override
 	{
-		GRender->DrawOutlinedCircle(*Player()->GetNavigationPath()->WaypointStart_, Vec4(255, 255, 0, 255), 70);
-		for (auto pos = Player()->GetNavigationPath()->WaypointStart_; pos != Player()->GetNavigationPath()->WaypointEnd_; pos++) {
-			GRender->DrawOutlinedCircle(*pos, Vec4(0, 255, 0, 255), 70);
-		}
-		/*for (auto unit : InRange)
+		GRender->DrawOutlinedCircle(Player()->GetPosition(), Vec4(255, 255, 0, 255), 475);
+		//return;
+		for (auto unit : InRange)
 		{
-			GRender->DrawOutlinedCircle(unit->GetPosition(), Vec4(255, 255, 0, 255), 70);
-		}*/
+			if(unit != NULL)
+				GRender->DrawOutlinedCircle(unit->GetPosition(), Vec4(255, 255, 0, 255), 70);
+		}
 	}
 
 	void OnGameUpdate() override
 	{
 		UpdateChampionData();
+		UnitTree.Clear();
+		auto mins = GEntityList->GetAllUnits();
+		random_shuffle(mins.begin(), mins.end());
+		UnitTree.Insert(Player());
+		for (auto unit : mins)
+		{
+			if(unit == NULL || unit == Player())
+				continue;
+			UnitTree.Insert(unit);
+		}
+
+		InRange.clear();
+		UnitTree.FindInRange(Player()->GetPosition().To2D(), 475, InRange);
 
 		IUnit* target = GTargetSelector->FindTarget(QuickestKill, PhysicalDamage, (E->IsReady() ? 1500 : 475));
 
 		if (GOrbwalking->GetOrbwalkingMode() == kModeCombo)
 		{
-			UnitTree.Clear();
-			for (auto unit : GEntityList->GetAllMinions(true,true,true))
-			{
-				UnitTree.Insert(unit);
-			}
-			InRange.clear();
-			UnitTree.FindInRange(Player()->GetPosition().To2D(), 1000, InRange);
+			//cout << "inserted!: " << endl;
 
-			cout << "size: " << InRange.size() << endl;
+			cout << "X " << Player()->GetPosition().x << " Y " << Player()->GetPosition().z << endl;
 
 			//cout << "Q Speed: " << GetQSpeed() << endl;
 			DoCombo(target);
@@ -116,6 +123,80 @@ private:
 
 #pragma region yasuoLogic
 
+	typedef pair<float, Vec2> VecPair;
+
+	IUnit* BestEJump(Vec2 target)
+	{
+		auto playerPos = Player()->GetPosition().To2D();
+
+		float jumpCost = 0.6f - (((float)Player()->GetSpellBook()->GetLevel(kSlotE)) / 10.0f) + 0.2f;
+		float fastestTime = (playerPos - target).Length() / Player()->MovementSpeed();
+		IUnit* best = NULL;
+		vector<IUnit*> around;
+		set<IUnit*> *path = new set<IUnit*>();
+		UnitTree.FindInRange(playerPos, E->Range(), around);
+		for (auto u : around)
+		{
+			if(!EnemyIsJumpable(u))
+				continue;
+			auto time = GetCost(u, playerPos, target, jumpCost, jumpCost, path);
+			if(time<fastestTime)
+			{
+				fastestTime = time;
+				best = u;
+			}
+		}
+		delete path;
+		return best;
+	}
+
+
+	float GetCost(IUnit* jump, Vec2 from, Vec2 target, float jumpCost, float totalCost, set<IUnit*> *path)
+	{
+		//Doesnt contain
+		if (path->count(jump) == 0)
+		{
+			path->insert(jump);
+			auto pos = jump->GetPosition().To2D();
+			//Prediction if first check
+			if (path->size() == 1)
+			{
+				Vec3 pred;
+				GPrediction->GetFutureUnitPosition(jump, E->GetDelay(), true, pred);
+				pos = pred.To2D();
+			}
+			Vec2 posAfterJump = from.Extend(pos, E->Range());
+
+			vector<IUnit*> around;
+			UnitTree.FindInRange(posAfterJump, E->Range(), around);
+			float fastestTime = (posAfterJump - target).Length()/Player()->MovementSpeed();
+
+			for(auto u : around)
+			{
+				if (!EnemyIsJumpable(u))
+					continue;
+				auto time = GetCost(u, posAfterJump, target, jumpCost, totalCost + jumpCost, path);
+				if (time < fastestTime)
+					fastestTime = time;
+			}
+			path->erase(jump);
+			return fastestTime;
+		}
+		return totalCost + (from - target).Length() / Player()->MovementSpeed();
+	}
+
+
+	void GetJumpablesAround(Vec2 orgin, float radius, vector<IUnit*> result)
+	{
+		vector<IUnit*> temp;
+		UnitTree.FindInRange(orgin, radius, temp);
+		for(auto unit : temp)
+		{
+			if (EnemyIsJumpable(unit))
+				result.push_back(unit);
+		}
+	}
+
 	void UseQSmart(IUnit* target, bool onlyEmpowered = false)
 	{
 		if (target == 0 || !Q->IsReady())
@@ -134,35 +215,28 @@ private:
 		}
 	}
 
-	bool GapCloseE(Vec2 position, set<IUnit*> *ignore = 0)
+	bool GapCloseE(Vec2 position, set<IUnit*> *ignore = NULL)
 	{
 		if (!E->IsReady())
 			return false;
 
-		IUnit* bestJumpUnit = 0;
+		IUnit* bestJumpUnit = NULL;
 		float bestRange = Distance(Player(), position);
 
 		//cout << " bestDist: " << bestRange << endl;
+		//Remnove ignores
+		//if(ignore != NULL)
+		//	for(IUnit* ign : *ignore)
+		//		UnitTree.Remove(ign);
 
-		for (auto unit : GEntityList->GetAllUnits())
-		{
-			if (!EnemyIsJumpable(unit) || !Distance(unit, Player()) > E->Range())
-				continue;
-			if (ignore != 0 && ignore->find(unit) != ignore->end())
-				continue;
-			Vec3 predictionPos;
-			GPrediction->GetFutureUnitPosition(unit, E->GetDelay(), true, predictionPos);
+		bestJumpUnit = BestEJump(position);
 
-			Vec2 posAfterJump = Player()->GetPosition().To2D().Extend(predictionPos.To2D(), E->Range());
-			float dist = (posAfterJump - position).Length();
-			if (dist < bestRange)
-			{
-				bestJumpUnit = unit;
-				bestRange = dist;
-			}
-		}
+		//Restre tree
+		//if (ignore != NULL)
+		//	for (IUnit* ign : *ignore)
+		//		UnitTree.Insert(ign);
 
-		if (bestJumpUnit != 0)
+		if (bestJumpUnit != NULL)
 		{
 			CastE(bestJumpUnit);
 			return true;

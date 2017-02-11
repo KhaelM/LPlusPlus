@@ -336,7 +336,7 @@ public:
 
 	Vec2 To2D() const
 	{
-		return Vec2(x, y);
+		return Vec2(x, z);
 	}
 };
 

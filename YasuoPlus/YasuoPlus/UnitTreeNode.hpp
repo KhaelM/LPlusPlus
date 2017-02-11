@@ -1,5 +1,7 @@
 #pragma once
-#include "PluginSDK.h"
+#include <set>
+
+#include "Vectors.hpp"
 
 struct UnitTreeNode {
 	Vec2 key;
@@ -10,15 +12,24 @@ struct UnitTreeNode {
 	UnitTreeNode* greater;
 	UnitTreeNode* less;
 
-	bool IsLeaf()
-	{
-		return greater == 0 && less == 0;
+	UnitTreeNode() {
+		key = Vec2(0, 0);
+		splitaxis = 0;
+		greater = NULL;
+		less = NULL;
 	}
 
 	UnitTreeNode(IUnit* unit, int axis) {
+		Init(unit, axis);
+	}
+
+	void Init(IUnit* unit, int axis)
+	{
 		values.push_back(unit);
 		key = unit->GetPosition().To2D();
 		splitaxis = axis;
+		greater = NULL;
+		less = NULL;
 	}
 
 	~UnitTreeNode()

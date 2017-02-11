@@ -1,4 +1,6 @@
 #pragma once
+#include <algorithm>
+
 #include "UnitTreeNode.hpp"
 
 using namespace std;
@@ -6,11 +8,16 @@ using namespace std;
 class UnitTree
 {
 public:
+	int usedSpace;
+	//vector<UnitTreeNode> nodesVector;
+
 	UnitTreeNode *Root;
 
 	UnitTree()
 	{
 		Root = NULL;
+		usedSpace = 0;
+		//nodesVector = vector<UnitTreeNode>(units.size());
 	}
 
 	~UnitTree()
@@ -21,6 +28,7 @@ public:
 	void Clear()
 	{
 		delete Root;
+		Root = NULL;
 	}
 
 	void Insert(IUnit* unit)
@@ -38,8 +46,19 @@ public:
 		FindInRange(Root, orgin, radius, result);
 	}
 
-private:
+	void FindInRangeNotWorking(Vec2& orgin, float radius, vector<IUnit*>& result)
+	{
+		vector<IUnit*> temp;
+		FindInRect(Root, orgin.x- radius/2, orgin.x + radius / 2, orgin.y - radius / 2, orgin.y + radius / 2, temp);
+		for (auto u : temp)
+		{
+			if ((u->GetPosition().To2D() - orgin).LengthSqr() < radius * radius) {
+				result.push_back(u);
+			}
+		}
+	}
 
+private:
 	UnitTreeNode* RemoveMin(UnitTreeNode* node)
 	{
 		if (node->less == NULL)
@@ -95,7 +114,11 @@ private:
 	UnitTreeNode* Insert(UnitTreeNode* node, IUnit* unit, int depth = 0)
 	{
 		if (node == NULL)
-			return new UnitTreeNode(unit, depth % 2);
+		{
+			auto node = new UnitTreeNode(unit, depth % 2);//GetNextNodeSpace();
+														  //node->Init(unit, depth % 2);
+			return node;
+		}
 
 		if (node->key == unit->GetPosition().To2D())
 		{
@@ -105,19 +128,43 @@ private:
 
 		if (node->splitaxis == 0)
 		{
-			if ((node->key.x > unit->GetPosition().x))
+			if ((node->key.x >= unit->GetPosition().x))
 				node->greater = Insert(node->greater, unit, depth + 1);
 			else
 				node->less = Insert(node->less, unit, depth + 1);
 		}
 		else
 		{
-			if ((node->key.y > unit->GetPosition().y))
+			if ((node->key.y >= unit->GetPosition().y))
 				node->greater = Insert(node->greater, unit, depth + 1);
 			else
 				node->less = Insert(node->less, unit, depth + 1);
 		}
 		return node;
+	}
+
+	void FindInRect(UnitTreeNode* node, float xmin, float xmax, float ymin, float ymax, vector<IUnit*>& result)
+	{
+		if (node == NULL)
+			return;
+		Vec2 key = node->key;
+		if (xmin <= key.x && xmax >= key.x && ymin <= key.y && ymax >= key.y)
+			result.insert(result.end(), node->values.begin(), node->values.end());
+		//X
+		if (node->splitaxis == 0)
+		{
+			if (xmin <= key.x)
+				FindInRect(node->less, xmin, xmax, ymin, ymax, result);
+			if (xmax >= key.x)
+				FindInRect(node->greater, xmin, xmax, ymin, ymax, result);
+		}
+		else
+		{
+			if (ymin <= key.y)
+				FindInRect(node->less, xmin, xmax, ymin, ymax, result);
+			if (ymax >= key.y)
+				FindInRect(node->greater, xmin, xmax, ymin, ymax, result);
+		}
 	}
 
 	void FindInRange(UnitTreeNode* node, Vec2& orgin, float radius, vector<IUnit*>& result)
@@ -134,7 +181,7 @@ private:
 				FindInRange(node->greater, orgin, radius, result);
 				return;
 			}
-			if (node->key.x - orgin.x < -radius) {
+			if (orgin.x - node->key.x > radius) {
 				FindInRange(node->less, orgin, radius, result);
 				return;
 			}
@@ -147,7 +194,7 @@ private:
 				FindInRange(node->greater, orgin, radius, result);
 				return;
 			}
-			if (node->key.y - orgin.y < -radius) {
+			if (orgin.y - node->key.y  > radius) {
 				FindInRange(node->less, orgin, radius, result);
 				return;
 			}
@@ -155,6 +202,60 @@ private:
 			FindInRange(node->less, orgin, radius, result);
 		}
 	}
+
+	/* Slow as fuk!
+	void MakeTree(UnitTreeNode* head, vector<IUnit*>& plist, int depth)
+	{
+	if (!plist.empty())
+	{
+	int axis = depth % 2;
+
+	std::vector<IUnit*> left_list;
+	std::vector<IUnit*> right_list;
+	IUnit* median = FindMedian(plist, left_list, right_list, axis);
+	head->Init(median, axis);
+
+	UnitTreeNode* left_node = new UnitTreeNode();
+	UnitTreeNode* right_node = new UnitTreeNode();
+
+	MakeTree(left_node, left_list, depth + 1);
+	if (!left_list.empty()) head->less = left_node;
+
+	MakeTree(right_node, right_list, depth + 1);
+	if (!right_list.empty()) head->greater = right_node;
+	}
+	}
+
+	IUnit* FindMedian(vector<IUnit*> &plist, vector<IUnit*> &left,
+	vector<IUnit*> &right, int axis)
+	{
+	IUnit* median = NULL;
+	int size = plist.size();
+	int med = ceil(float(size) / float(2));
+	int count = 0;
+
+	if (size == 1)
+	return plist.front();
+
+	// Using lambda function here, to define comparison function--parametrized by 'axis'
+	sort(plist.begin(), plist.end(),
+	[&](IUnit* a, IUnit* b) -> bool
+	{
+	return (axis%2==0)?(a->GetPosition().x > b->GetPosition().x) : (a->GetPosition().y > b->GetPosition().y);
+	});
+
+	for (auto& x : plist)
+	{
+	if (count < med)
+	left.push_back(x);
+	else
+	right.push_back(x);
+	++count;
+	}
+	median = left.back();
+	left.pop_back();
+	return median;
+	}*/
 
 
 };
