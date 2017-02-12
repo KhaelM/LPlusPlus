@@ -12,6 +12,13 @@
 using namespace std;
 using namespace Utils;
 
+/*
+ * TODO LIST:
+ * 1) LaneClear use E
+ *
+ *
+ */
+
 class YasuoPlus : public PluginBase
 {
 public:
@@ -71,12 +78,17 @@ public:
 
 		if (GOrbwalking->GetOrbwalkingMode() == kModeCombo)
 		{
-			cout << "lasr: " << LastDash.StartTick << " gt:" << GameTicks() << endl;
+			cout << "lasr: " << LastDash.StartTick << " gt:" << GGame->CurrentTick() << endl;
 
 			//cout << "X " << Player()->GetPosition().x << " Y " << Player()->GetPosition().z << endl;
 
 			//cout << "Q Speed: " << GetQSpeed() << endl;
 			DoCombo(target);
+		}
+
+		if(GOrbwalking->GetOrbwalkingMode() == kModeLaneClear)
+		{
+			LaneClear();
 		}
 
 		UseRSmart();
@@ -117,6 +129,73 @@ private:
 		}
 
 		UseQSmart(target);
+	}
+
+	void LaneClear()
+	{
+		//If Active dash check if woth to Q
+		if(IsDashing() && Q->IsReady() && Distance(Player(), LastDash.EndPosition) < 80)
+		{
+			vector<IUnit*> aroundQCircle;
+			GetAround(LastDash.EndPosition.To2D(),QCircle->Range(), aroundQCircle,
+				[&](IUnit* unit) -> bool 
+				{
+					return HasCreepFlags(unit) && !unit->IsDead() && unit->IsEnemy(Player());
+				}
+			);
+			if (aroundQCircle.size() > 1)
+			{
+				if(Q->CastOnPlayer())
+					return;
+			}
+		}
+		if (E->IsReady())
+		{
+			vector<IUnit*> aroundE;
+			GetAround(Player()->GetPosition().To2D(), E->Range(), aroundE,
+				[&](IUnit* unit) -> bool
+			{
+				return HasCreepFlags(unit) && unit->IsEnemy(Player());
+			});
+			for (auto unit : aroundE)
+			{
+				Vec2 posAfterJump = Player()->GetPosition().To2D().Extend(unit->GetPosition().To2D(), E->Range());
+				vector<IUnit*> aroundQCircle;
+				GetAround(posAfterJump, QCircle->Range(), aroundQCircle,
+					[&](IUnit* unit) -> bool
+				{
+					return HasCreepFlags(unit) && !unit->IsDead() && unit->IsEnemy(Player());
+				});
+				if ((Q->IsReady() && aroundQCircle.size() > 2) || getEDamage(unit) >= unit->GetHealth())
+				{
+					if (CastE(unit))
+					{
+						return;
+					}
+				}
+			}
+		}
+
+		if(!IsDashing() && Q->IsReady())
+		{
+			if(IsQEmpovered())
+			{
+				Vec3 pos;
+				int count;
+				GPrediction->FindBestCastPosition(QEmpowerd->Range(), QEmpowerd->Radius(), true, true, true, pos, count);
+				if (count > 3)
+					QEmpowerd->CastOnPosition(pos);
+			}
+			else
+			{
+				Vec3 pos;
+				int count;
+				GPrediction->FindBestCastPosition(Q->Range(), Q->Radius(), true, true, true, pos, count);
+				if (count > 0)
+					Q->CastOnPosition(pos);
+			}
+		}
+
 	}
 
 	void Harass()
@@ -197,13 +276,13 @@ private:
 	}
 
 
-	void GetJumpablesAround(Vec2 orgin, float radius, vector<IUnit*> result)
+	void GetAround(Vec2 orgin, float radius, vector<IUnit*> &result, function<bool(IUnit*)> predicate)
 	{
 		vector<IUnit*> temp;
 		UnitTree.FindInRange(orgin, radius, temp);
 		for(auto unit : temp)
 		{
-			if (EnemyIsJumpable(unit))
+			if (unit != NULL && predicate(unit))
 				result.push_back(unit);
 		}
 	}
@@ -296,9 +375,14 @@ private:
 		return false;
 	}
 
+	bool HasCreepFlags(IUnit* unit)
+	{
+		return unit->UnitFlags() == FL_HERO || unit->UnitFlags() == FL_CREEP;
+	}
+
 	bool EnemyIsJumpable(IUnit* enemy)
 	{
-		if (enemy->UnitFlags() != FL_HERO && enemy->UnitFlags() != FL_CREEP)
+		if (!HasCreepFlags(enemy))
 			return false;
 
 		if (!enemy->IsValidTarget() || !enemy->IsEnemy(Player()) || enemy->IsInvulnerable() || enemy->IsDead())
@@ -378,23 +462,23 @@ private:
 #pragma region spellsLoad  
 	void LoadSpells()
 	{
-		Q = GPluginSDK->CreateSpell2(kSlotQ, kTargetCast, false, true, kCollidesWithNothing);
+		Q = GPluginSDK->CreateSpell2(kSlotQ, kLineCast, false, true, kCollidesWithNothing);
 		Q->SetSkillshot(GetQSpeed(), 50.f, FLT_MAX, 475.f);
 
-		QEmpowerd = GPluginSDK->CreateSpell2(kSlotQ, kTargetCast, true, true, kCollidesWithNothing);
+		QEmpowerd = GPluginSDK->CreateSpell2(kSlotQ, kLineCast, true, true, kCollidesWithNothing);
 		QEmpowerd->SetSkillshot(GetQEmpowerdSpeed(), 50.f, 1200.f, 1000.f);
 
-		QCircle = GPluginSDK->CreateSpell2(kSlotQ, kTargetCast, false, true, kCollidesWithNothing);
-		QCircle->SetSkillshot(GetQSpeed(), 325.f, FLT_MAX, 0.f);
+		QCircle = GPluginSDK->CreateSpell2(kSlotQ, kCircleCast, false, true, kCollidesWithNothing);
+		QCircle->SetSkillshot(GetQSpeed(), 300.f, FLT_MAX, 0.f);
 
 		W = GPluginSDK->CreateSpell2(kSlotW, kLineCast, false, true, kCollidesWithMinions);
 		W->SetOverrideRange(400.f);
 
-		E = GPluginSDK->CreateSpell2(kSlotE, kLineCast, false, false, kCollidesWithNothing);
+		E = GPluginSDK->CreateSpell2(kSlotE, kTargetCast, false, false, kCollidesWithNothing);
 		E->SetOverrideRange(475.f);
 		E->SetOverrideDelay(0.1f);
 
-		R = GPluginSDK->CreateSpell2(kSlotR, kLineCast, false, false, kCollidesWithMinions);
+		R = GPluginSDK->CreateSpell2(kSlotR, kCircleCast, false, false, kCollidesWithMinions);
 		W->SetOverrideRange(1200.f);
 	}
 
@@ -402,6 +486,13 @@ private:
 		Q->SetOverrideDelay(GetQSpeed());
 		QEmpowerd->SetOverrideDelay(GetQEmpowerdSpeed());
 		QCircle->SetOverrideDelay(GetQSpeed());
+	}
+
+	float getEDamage(IUnit* target)
+	{
+		//TODO: implement buff
+		auto base = GDamage->GetSpellDamage(Player(), target, kSlotE);
+		return (float)base;
 	}
 
 	float GetQSpeed()
