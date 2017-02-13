@@ -153,6 +153,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="DllMain.h" />
+    <ClInclude Include="Menu.hpp" />
     <ClInclude Include="UnitTree.hpp" />
     <ClInclude Include="LPPConstants.h" />
     <ClInclude Include="UnitTreeNode.hpp" />

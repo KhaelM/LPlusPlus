@@ -4,6 +4,7 @@
 #include "UnitTree.hpp"
 #include <queue>
 #include <ctime>
+#include "Menu.hpp"
 
 #define BASE_ATTACKSPEED 0.67f
 #define Q_BASE_DELAY .4f
@@ -14,8 +15,10 @@ using namespace Utils;
 
 /*
  * TODO LIST:
- * 1) LaneClear use E
- *
+ * 1) LaneClear use E (60%)
+ * 2) Menu
+ * 
+ * n) Wall monster dash
  *
  */
 
@@ -30,31 +33,39 @@ public:
 	ISpell2* R;
 
 	UnitDash LastDash;
-	vector<IUnit*> InRange;
 	UnitTree UnitTree;
+	Menu* YasuoMenu;
 	
 	void OnLoad() override
 	{
 		Log("Loaded!");
 		ZeroMemory(&LastDash, sizeof(UnitDash));
 		this->LoadSpells();
+		YasuoMenu = new Menu();
 	}
 
 	void OnUnLoad() override
 	{
 		UnitTree.Clear();
+		delete YasuoMenu;
 	}
 
 	void OnRender() override
 	{
-		if(IsDashing())
-			GRender->DrawOutlinedCircle(Player()->GetPosition(), Vec4(255, 255, 0, 255), 475);
-		//return;
-		for (auto unit : InRange)
+		if(YasuoMenu->DrawingQ->Enabled())
 		{
-			if(unit != NULL)
-				GRender->DrawOutlinedCircle(unit->GetPosition(), Vec4(255, 255, 0, 255), 70);
+			if(IsQEmpovered())
+				GRender->DrawOutlinedCircle(Player()->GetPosition(), Vec4(224, 37, 8, 180), QEmpowerd->Range());
+			else
+				GRender->DrawOutlinedCircle(Player()->GetPosition(), Vec4(224, 37, 8, 180), Q->Range());
 		}
+
+		if (YasuoMenu->DrawingE->Enabled())
+				GRender->DrawOutlinedCircle(Player()->GetPosition(), Vec4(50, 255,248, 180), E->Range());
+
+		if (YasuoMenu->DrawingR->Enabled())
+			GRender->DrawOutlinedCircle(Player()->GetPosition(), Vec4(207, 50, 255, 180), R->Range());
+
 	}
 
 	void OnGameUpdate() override
@@ -71,18 +82,17 @@ public:
 			UnitTree.Insert(unit);
 		}
 
-		InRange.clear();
-		UnitTree.FindInRange(Player()->GetPosition().To2D(), 475, InRange);
+		if (YasuoMenu->ComboRUse->Enabled())
+			UseRSmart();
+		
+		IUnit* target = GTargetSelector->FindTarget(QuickestKill, PhysicalDamage, (E->IsReady() ? 
+			1500 : (IsQEmpovered())?QEmpowerd->Range():Q->Range()));
 
-		IUnit* target = GTargetSelector->FindTarget(QuickestKill, PhysicalDamage, (E->IsReady() ? 1500 : 475));
+		if (YasuoMenu->HarassQ)
+			Harass(target);
 
 		if (GOrbwalking->GetOrbwalkingMode() == kModeCombo)
 		{
-			cout << "lasr: " << LastDash.StartTick << " gt:" << GGame->CurrentTick() << endl;
-
-			//cout << "X " << Player()->GetPosition().x << " Y " << Player()->GetPosition().z << endl;
-
-			//cout << "Q Speed: " << GetQSpeed() << endl;
 			DoCombo(target);
 		}
 
@@ -91,7 +101,13 @@ public:
 			LaneClear();
 		}
 
-		UseRSmart();
+		if(GOrbwalking->GetOrbwalkingMode() == kModeLastHit)
+		{
+			LastHit();
+		}
+		if (GetAsyncKeyState(YasuoMenu->FleeFleeKey->GetInteger()) & 0x8000)
+			Flee(GGame->CursorPosition());
+
 	}
 
 	void OnDash(UnitDash* dashInfo) override
@@ -101,11 +117,6 @@ public:
 		cout << "OnDash" << endl;
 		memcpy(&LastDash, dashInfo, sizeof(UnitDash));
 		TickOffset = LastDash.StartTick - (int)(GGame->Time() * 1000);
-	}
-
-protected:
-	void DrawMenu() override
-	{
 	}
 
 private:
@@ -127,8 +138,44 @@ private:
 		{
 			return;
 		}
-
 		UseQSmart(target);
+	}
+
+	void LastHit()
+	{
+
+		if (Q->IsReady())
+		{
+			vector<IUnit*> aroundQ;
+			GetAround(Player()->GetPosition().To2D(), Q->Range(), aroundQ,
+				[&](IUnit* unit) -> bool
+			{
+				return HasCreepFlags(unit) && unit->IsEnemy(Player());
+			});
+			for (auto unit : aroundQ)
+			{
+				if (getQDamage(unit) >= unit->GetHealth())
+					if (CastQ(unit))
+						return;
+			}
+		}
+
+		if (E->IsReady())
+		{
+			vector<IUnit*> aroundE;
+			GetAround(Player()->GetPosition().To2D(), E->Range(), aroundE,
+				[&](IUnit* unit) -> bool
+			{
+				return HasCreepFlags(unit) && unit->IsEnemy(Player());
+			});
+			for (auto unit : aroundE)
+			{
+				if (getEDamage(unit) >= unit->GetHealth())
+					if (CastE(unit))
+						return;
+			}
+		}
+
 	}
 
 	void LaneClear()
@@ -145,7 +192,7 @@ private:
 			);
 			if (aroundQCircle.size() > 1)
 			{
-				if(Q->CastOnPlayer())
+				if(QCircle->CastOnPlayer())
 					return;
 			}
 		}
@@ -190,7 +237,7 @@ private:
 			{
 				Vec3 pos;
 				int count;
-				GPrediction->FindBestCastPosition(Q->Range(), Q->Radius(), true, true, true, pos, count);
+				GPrediction->FindBestCastPosition(Q->Range(), Q->Radius(), false, true, true, pos, count);
 				if (count > 0)
 					Q->CastOnPosition(pos);
 			}
@@ -198,8 +245,36 @@ private:
 
 	}
 
-	void Harass()
+	void Harass(IUnit* target)
 	{
+		if(target == NULL)
+			return;
+
+		vector<IUnit*> enemyTowers;
+		GetAround(Player()->GetPosition().To2D(), 950, enemyTowers, [&](IUnit* unit) -> bool
+		{
+			return unit->UnitFlags() == FL_TURRET && !unit->IsDead() && unit->IsEnemy(Player());
+		});
+		if(enemyTowers.size() == 0 || !YasuoMenu->HarassUnderTower->Enabled())
+			UseQSmart(target);
+	}
+
+	void Flee(Vec3 position)
+	{
+		GapCloseE(position.To2D());
+		GGame->IssueOrder(Player(), kMoveTo, position);
+		if (!YasuoMenu->FleeFleeStack->Enabled() || IsQEmpovered())
+			return;
+		auto spell = (IsDashing()) ? QCircle : Q;
+		auto pos = (IsDashing()) ? LastDash.EndPosition.To2D() : Player()->GetPosition().To2D();
+		vector<IUnit*> qTargets;
+		GetAround(pos, spell->Range(), qTargets,
+			[&](IUnit* unit) -> bool
+		{
+			return HasCreepFlags(unit) && !unit->IsDead() && unit->IsEnemy(Player());
+		});
+		if (qTargets.size() > 0)
+			spell->CastOnTarget(qTargets[0], kHitChanceMedium);
 
 	}
 
@@ -211,7 +286,7 @@ private:
 		auto playerPos = Player()->GetPosition().To2D();
 
 		float jumpCost = 0.6f - (((float)Player()->GetSpellBook()->GetLevel(kSlotE)) / 10.0f) + 0.4f;
-		float fastestTime = (playerPos - target).Length() / Player()->MovementSpeed();
+		float fastestTime = ((playerPos - target).Length()-100) / Player()->MovementSpeed();
 		IUnit* best = NULL;
 		vector<IUnit*> around;
 		set<IUnit*> *path = new set<IUnit*>();
@@ -264,7 +339,7 @@ private:
 			{
 				if (!EnemyIsJumpable(u))
 					continue;
-				Vec2 fromAfterWalk = posAfterJump.Extend(target, Player()->MovementSpeed()*jumpCost);
+				Vec2 fromAfterWalk = posAfterJump.Extend(target, Player()->MovementSpeed()*(jumpCost-0.4f));
 				auto time = GetCost(u, fromAfterWalk, target, jumpCost, totalCost + jumpCost, path);
 				if (time < fastestTime)
 					fastestTime = time;
@@ -312,8 +387,30 @@ private:
 
 		IUnit* bestJumpUnit = 0;
 		float bestRange = Distance(Player(), position);
+		if(YasuoMenu->ComboEPathfinder)
+			bestJumpUnit = BestEJump(position, ignore);
+		else
+		{
+			vector<IUnit*> around;
+			UnitTree.FindInRange(Player()->GetPosition().To2D(), E->Range(), around);
+			for (auto unit : around)
+			{
+				if (!EnemyIsJumpable(unit))
+					continue;
+				if (ignore != 0 && ignore->find(unit) != ignore->end())
+					continue;
+				Vec3 predictionPos;
+				GPrediction->GetFutureUnitPosition(unit, E->GetDelay(), true, predictionPos);
 
-		bestJumpUnit = BestEJump(position, ignore);
+				Vec2 posAfterJump = Player()->GetPosition().To2D().Extend(predictionPos.To2D(), E->Range());
+				float dist = (posAfterJump - position).Length();
+				if (dist < bestRange)
+				{
+					bestJumpUnit = unit;
+					bestRange = dist;
+				}
+			}
+		}
 
 		if (bestJumpUnit != 0)
 		{
@@ -357,7 +454,7 @@ private:
 	{
 		float timeToLand = FLT_MAX;
 		auto airborns = GetKnockedUpEnemies(timeToLand);
-		if (timeToLand > 0.4f)
+		if (timeToLand > 0.4f || !YasuoMenu->ComboRUseOnLanding->Enabled())
 			return false;
 		for (auto ene : airborns)
 		{
@@ -367,7 +464,8 @@ private:
 				if (Distance(ene, ene2) < 400)
 					aroundAir++;
 			}
-			if (aroundAir >= 1 || ene->HealthPercent() < 35) {
+
+			if (aroundAir >= YasuoMenu->ComboREnemiesCount->GetInteger() || ene->HealthPercent() < 35) {
 				if (R->CastOnPosition(ene->GetPosition()))
 					return true;
 			}
@@ -424,15 +522,15 @@ private:
 		if (!Q->IsReady() || Distance(Player(), target) > Q->Range())
 			return false;
 		cout << "CastQ "<< Q->Range() << endl;
-		return Q->CastOnTarget(target,3);
+		return Q->CastOnTarget(target, kHitChanceHigh);
 	}
 
 	bool CastQEmpowered(IUnit* target)
 	{
-		if (!IsQEmpovered() || !Q->IsReady() || Distance(Player(), target)>Q->Range())
+		if (!IsQEmpovered() || !QEmpowerd->IsReady() || Distance(Player(), target)>QEmpowerd->Range())
 			return false;
 		cout << "CastQEmpowered" << endl;
-		return QEmpowerd->CastOnTarget(target, 3);
+		return QEmpowerd->CastOnTarget(target, kHitChanceHigh);
 	}
 
 	bool CastQCircle(IUnit* target)
@@ -453,8 +551,21 @@ private:
 	{
 		if (!E->IsReady())
 			return false;
-		auto t = E->CastOnUnit(target);;
-		return t;
+		Vec2 posAfterJump = Player()->GetPosition().To2D().Extend(target->GetPosition().To2D(), E->Range());
+		vector<IUnit*> enemyTowers;
+		GetAround(posAfterJump, 950, enemyTowers, [&](IUnit* unit) -> bool
+		{
+			return unit->UnitFlags() == FL_TURRET && !unit->IsDead() && unit->IsEnemy(Player());
+		});
+
+		if(YasuoMenu->ComboDontTowerDive->Enabled())
+			for(auto tower : enemyTowers)
+			{
+				if (Distance(tower, posAfterJump) < Distance(tower, Player()))
+					return false;
+			}
+
+		return E->CastOnUnit(target);
 	}
 
 #pragma endregion spellsExecute  
@@ -492,6 +603,13 @@ private:
 	{
 		//TODO: implement buff
 		auto base = GDamage->GetSpellDamage(Player(), target, kSlotE);
+		return (float)base;
+	}
+
+	float getQDamage(IUnit* target)
+	{
+		//TODO: implement buff
+		auto base = GDamage->GetSpellDamage(Player(), target, kSlotQ);
 		return (float)base;
 	}
 

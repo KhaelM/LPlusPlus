@@ -70,6 +70,4 @@ public:
 			< angle;
 	}
 
-protected:
-	virtual void DrawMenu() = 0;
 };
