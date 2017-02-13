@@ -181,7 +181,7 @@ private:
 	void LaneClear()
 	{
 		//If Active dash check if woth to Q
-		if(IsDashing() && Q->IsReady() && Distance(Player(), LastDash.EndPosition) < 80)
+		if(YasuoMenu->LaneClearQ->Enabled() && IsDashing() && Q->IsReady() && Distance(Player(), LastDash.EndPosition) < 80)
 		{
 			vector<IUnit*> aroundQCircle;
 			GetAround(LastDash.EndPosition.To2D(),QCircle->Range(), aroundQCircle,
@@ -196,7 +196,7 @@ private:
 					return;
 			}
 		}
-		if (E->IsReady())
+		if (E->IsReady() && YasuoMenu->LaneClearE->Enabled())
 		{
 			vector<IUnit*> aroundE;
 			GetAround(Player()->GetPosition().To2D(), E->Range(), aroundE,
@@ -223,7 +223,7 @@ private:
 			}
 		}
 
-		if(!IsDashing() && Q->IsReady())
+		if(!IsDashing() && Q->IsReady() && YasuoMenu->LaneClearQ->Enabled())
 		{
 			if(IsQEmpovered())
 			{
